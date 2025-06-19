@@ -7,6 +7,11 @@ class Settings(BaseSettings):
     # ─── Secrets (must come from env/.env) ───────────────────────────────────────
     llm_router_api_key: str
     jwt_secret_key: str
+    
+    # ─── Model limits (used in schema validators) ────────────────────────────────
+    max_input_chars: int = 16000
+    max_model_tokens: int = 4096
+
 
     # ─── LLM Endpoints ─────────────────────────────────────────────────────────
     # OpenAI base URL is almost always https://api.openai.com
