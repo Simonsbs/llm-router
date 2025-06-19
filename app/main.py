@@ -2,6 +2,7 @@ import logging
 from typing import Dict, List
 
 from fastapi import FastAPI, HTTPException, Depends
+from starlette.requests import Request
 from pydantic import BaseModel, Field
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,6 +15,11 @@ from app.security import verify_api_key
 from app.middleware_security import SecurityHeadersMiddleware
 from app.middleware_body_limit import BodySizeLimitMiddleware
 from app.adapters.adapter import Adapter
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+
 
 # ─── Init ───────────────────────────────────────────────────────────────────────
 configure_logging()
@@ -24,6 +30,13 @@ app = FastAPI(
     description="Dynamically routes /v1/chat/completions to Ollama, OpenAI, etc.",
     dependencies=[Depends(verify_api_key)],
 )
+
+# ─── Rate Limiting ──────────────────────────────────────────────────────────────
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
 
 # ─── Middleware ─────────────────────────────────────────────────────────────────
 app.add_middleware(CorrelationIdMiddleware)
@@ -55,7 +68,8 @@ class ChatRequest(BaseModel):
 
 # ─── Endpoints ──────────────────────────────────────────────────────────────────
 @app.post("/v1/chat/completions")
-async def chat(req: ChatRequest):
+@limiter.limit("30/minute")
+async def chat(request: Request, req: ChatRequest):
     payload = req.dict()
     adapter = Adapter("stream_chat" if req.stream else "chat", payload)
 
@@ -74,7 +88,8 @@ class EmbeddingRequest(BaseModel):
     input: List[str] = Field(..., examples=[["What is Simon B. Stirling known for?"]])
 
 @app.post("/v1/embeddings")
-async def embeddings(req: EmbeddingRequest):
+#@limiter.limit("60/minute")
+async def embeddings(request: Request, req: EmbeddingRequest):
     payload = req.dict()
     adapter = Adapter("embed", payload)
 
