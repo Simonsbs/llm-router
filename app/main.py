@@ -1,6 +1,5 @@
-import importlib
 import logging
-from typing import Dict, List, Any
+from typing import Dict, List
 
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel, Field
@@ -14,9 +13,7 @@ from app.middlewares import LoggingMiddleware
 from app.security import verify_api_key
 from app.middleware_security import SecurityHeadersMiddleware
 from app.middleware_body_limit import BodySizeLimitMiddleware
-
-from langchain_core.runnables import RunnableLambda
-from app.adapters.runnables import router_chain
+from app.adapters.adapter import Adapter
 
 # ─── Init ───────────────────────────────────────────────────────────────────────
 configure_logging()
@@ -51,68 +48,38 @@ except ImportError:
 
 # ─── Models ─────────────────────────────────────────────────────────────────────
 class ChatRequest(BaseModel):
-    model: str = Field(..., examples=["openai:gpt-4o", "ollama:llama3"])
     messages: List[Dict[str, str]]
     temperature: float | None = 0.7
     max_tokens: int | None = 1024
     stream: bool | None = False
 
-# ─── Helper ─────────────────────────────────────────────────────────────────────
-def _load_adapter(model_id: str):
-    """
-    Fallback for streaming: load provider adapter by prefix.
-    Default provider = 'ollama'.
-    """
-    if ":" in model_id:
-        provider, model_name = model_id.split(":", 1)
-    else:
-        provider, model_name = "ollama", model_id
-
-    try:
-        mod = importlib.import_module(f"app.adapters.{provider}_adapter")
-        return mod.get_adapter(model_name)
-    except ModuleNotFoundError:
-        raise HTTPException(400, detail=f"Provider '{provider}' not supported")
-
 # ─── Endpoints ──────────────────────────────────────────────────────────────────
 @app.post("/v1/chat/completions")
 async def chat(req: ChatRequest):
-    inputs = {
-        "model": req.model,
-        "messages": req.messages,
-        "temperature": req.temperature,
-        "max_tokens": req.max_tokens,
-    }
+    payload = req.dict()
+    adapter = Adapter("stream_chat" if req.stream else "chat", payload)
 
     if req.stream:
-        # Streaming path still uses direct adapter for chunked SSE
-        adapter = _load_adapter(req.model)
-
         async def event_gen():
             async for chunk in adapter.chat_stream(
                 req.messages, req.temperature, req.max_tokens
             ):
                 yield f"data: {chunk}\n\n"
             yield "data: [DONE]\n\n"
-
         return StreamingResponse(event_gen(), media_type="text/event-stream")
 
-    # Non‐streaming: invoke the LangChain router dynamically
-    result = await router_chain.ainvoke(inputs)
-    return result
+    return await adapter.chat(req.messages, req.temperature, req.max_tokens)
 
 class EmbeddingRequest(BaseModel):
-    model: str = Field(..., examples=["ollama:bge-m3"])
     input: List[str] = Field(..., examples=[["What is Simon B. Stirling known for?"]])
 
 @app.post("/v1/embeddings")
 async def embeddings(req: EmbeddingRequest):
-    adapter = _load_adapter(req.model)
-    logger = logging.getLogger("router")
+    payload = req.dict()
+    adapter = Adapter("embed", payload)
 
     try:
-        result = await adapter.embed(req.input)
-        return result
-    except Exception as e:
-        logger.exception("embedding error")
+        return await adapter.embed(req.input)
+    except Exception:
+        logging.getLogger("router").exception("embedding error")
         raise HTTPException(500, detail="Embedding failed")
