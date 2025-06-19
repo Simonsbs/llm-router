@@ -4,6 +4,8 @@ import datetime
 import jwt
 import time
 import os
+import httpx
+import sys
 from fastapi import Body
 
 from fastapi import FastAPI, HTTPException, Depends
@@ -57,6 +59,27 @@ app = FastAPI(
     version="0.1.0",
     description="Dynamically routes /v1/chat/completions to Ollama, OpenAI, etc.",
 )
+
+@app.on_event("startup")
+async def startup_healthchecks():
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        # Always check OpenAI…
+        try:
+            await client.get(
+                f"{settings.openai_api_base}/v1/models",
+                headers={"Authorization": f"Bearer {os.getenv('OPENAI_API_KEY','')}"}
+            )
+        except Exception as e:
+            print(f"🔥 OpenAI healthcheck failed: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        # …but only check Ollama if your default model is an Ollama model
+        if settings.default_chat_model.startswith("ollama"):
+            try:
+                await client.get(f"{settings.ollama_url}/api/health")
+            except Exception as e:
+                print(f"🔥 Ollama healthcheck failed: {e}", file=sys.stderr)
+                sys.exit(1)
 
 # ─── Global Exception Handler ───────────────────────────────────────────────────
 @app.exception_handler(AdapterError)
