@@ -1,12 +1,15 @@
 import logging
 from app.config import settings
 import datetime
+import json
 import jwt
 import time
 import os
 import httpx
 import sys
 from fastapi import Body
+from fastapi import FastAPI, Response, status
+import httpx, os
 
 from fastapi import FastAPI, HTTPException, Depends
 from starlette.requests import Request
@@ -71,15 +74,14 @@ async def startup_healthchecks():
             )
         except Exception as e:
             print(f"🔥 OpenAI healthcheck failed: {e}", file=sys.stderr)
-            sys.exit(1)
+            raise RuntimeError("OpenAI is unreachable at startup") from e
 
         # …but only check Ollama if your default model is an Ollama model
         if settings.default_chat_model.startswith("ollama"):
             try:
                 await client.get(f"{settings.ollama_url}/api/health")
             except Exception as e:
-                print(f"🔥 Ollama healthcheck failed: {e}", file=sys.stderr)
-                sys.exit(1)
+                logging.getLogger("router").warning(f"Ollama healthcheck warning: {e}")
 
 # ─── Global Exception Handler ───────────────────────────────────────────────────
 @app.exception_handler(AdapterError)
@@ -159,10 +161,42 @@ async def metrics():
 # ─── Health Check ───────────────────────────────────────────────────────────────
 @app.get("/healthz", tags=["health"])
 async def healthz():
-    """
-    Liveness probe: returns 200 if the service is up.
-    """
+    # “I am alive” – no external calls
     return {"status": "ok"}
+
+@app.get("/readyz", tags=["health"])
+async def readyz():
+    """
+    “Am I ready to serve traffic?”
+     – OpenAI must be up
+     – Ollama only if it’s in your default routing
+    """
+    errors = {}
+    async with httpx.AsyncClient(timeout=2.0) as client:
+        # 1) OpenAI
+        try:
+            await client.get(
+                f"{settings.openai_api_base}/v1/models",
+                headers={"Authorization": f"Bearer {os.getenv('OPENAI_API_KEY','')}"}
+            )
+        except Exception as e:
+            errors["openai"] = str(e)
+
+        # 2) Ollama (only if you might route to it)
+        if settings.default_chat_model.startswith("ollama"):
+            try:
+                await client.get(f"{settings.ollama_url}/api/health")
+            except Exception as e:
+                errors["ollama"] = str(e)
+
+    if errors:
+        return Response(
+            content=json.dumps({"ready": False, "errors": errors}),
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            media_type="application/json"
+        )
+
+    return {"ready": True}
 
 # ─── API Key Authentication ──────────────────────────────────────────────────────
 @app.post("/v1/token")
