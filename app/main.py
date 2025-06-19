@@ -75,6 +75,13 @@ try:
 except ImportError:
     pass
 
+# ─── Health Check ───────────────────────────────────────────────────────────────
+@app.get("/healthz", tags=["health"])
+async def healthz():
+    """
+    Liveness probe: returns 200 if the service is up.
+    """
+    return {"status": "ok"}
 
 # ─── API Key Authentication ──────────────────────────────────────────────────────
 @app.post("/v1/token")
