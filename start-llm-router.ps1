@@ -2,36 +2,51 @@
 param(
     [string]$ImageName     = "simongpt-llm-router",
     [string]$ContainerName = "llm-router",
-    [string]$ApiKey        = "",
+    [string]$ApiKey,
+    [string]$JwtSecret,
     [string]$OllamaUrl     = "http://host.docker.internal:11434",
     [int]   $Port          = 8080
 )
 
-# Load .env if ApiKey not provided
-if (-not $ApiKey) {
-    $envFile = Join-Path $PSScriptRoot ".env"
-    if (Test-Path $envFile) {
-        Write-Host "🔍 Reading .env for LLM_ROUTER_API_KEY..."
-        Get-Content $envFile | ForEach-Object {
-            if ($_ -match '^[ \t]*([^#=]+)[ \t]*=[ \t]*(.*)') {
-                $key = $matches[1].Trim()
-                $val = $matches[2].Trim('"')
-                if ($key -eq 'LLM_ROUTER_API_KEY') {
-                    $ApiKey = $val
-                }
+# Load .env values
+$envVars = @{}
+$envFile = Join-Path $PSScriptRoot ".env"
+if (Test-Path $envFile) {
+    Write-Host "🔍 Reading .env file..."
+    Get-Content $envFile | ForEach-Object {
+        if ($_ -match '^[ \t]*([^#=]+)[ \t]*=[ \t]*(.*)') {
+            $key = $matches[1].Trim()
+            $val = $matches[2].Trim('"')
+            $envVars[$key] = $val
+
+            switch ($key) {
+                "LLM_ROUTER_API_KEY" { if (-not $ApiKey)   { $ApiKey   = $val } }
+                "JWT_SECRET_KEY"     { if (-not $JwtSecret){ $JwtSecret= $val } }
+                "OLLAMA_URL"         { if ($OllamaUrl -eq "http://host.docker.internal:11434") { $OllamaUrl = $val } }
             }
         }
     }
-    if (-not $ApiKey) {
-        Write-Error "API key not set. Provide -ApiKey or add LLM_ROUTER_API_KEY to .env"
-        exit 1
-    }
 }
+
+# Validate required fields
+if (-not $ApiKey) {
+    Write-Error "❌ LLM_ROUTER_API_KEY not set. Provide -ApiKey or set it in .env"
+    exit 1
+}
+if (-not $JwtSecret) {
+    Write-Error "❌ JWT_SECRET_KEY not set. Provide -JwtSecret or set it in .env"
+    exit 1
+}
+
+# Always override explicit values
+$envVars["LLM_ROUTER_API_KEY"] = $ApiKey
+$envVars["JWT_SECRET_KEY"]     = $JwtSecret
+$envVars["OLLAMA_URL"]         = $OllamaUrl
 
 Write-Host "⏳ Building Docker image '$ImageName'..."
 docker build -t $ImageName .
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "Build failed"
+    Write-Error "❌ Build failed"
     exit 1
 }
 
@@ -46,15 +61,25 @@ if ($existing) {
 }
 
 Write-Host "🚀 Running new container '$ContainerName'..."
-docker run -d `
-    --name $ContainerName `
-    -e "LLM_ROUTER_API_KEY=$ApiKey" `
-    -e "OLLAMA_URL=$OllamaUrl" `
-    -p ${Port}:$Port `
-    $ImageName
+$dockerArgs = @(
+    "run", "-d",
+    "--name", $ContainerName,
+    "-p", "${Port}:${Port}"
+)
+
+# Add all env vars as -e key=value
+$envVars.GetEnumerator() | ForEach-Object {
+    $dockerArgs += "-e"
+    $dockerArgs += "$($_.Key)=$($_.Value)"
+}
+
+$dockerArgs += $ImageName
+
+# Execute the docker run safely
+docker @dockerArgs
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "Failed to start container"
+    Write-Error "❌ Failed to start container"
     exit 1
 }
 
-Write-Host "✅ Container '$ContainerName' is up and listening on port $Port."
+Write-Host "✅ Container '$ContainerName' is running and listening on port $Port."

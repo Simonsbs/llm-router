@@ -1,15 +1,17 @@
-asgi-correlation-id==4.3.4       # correlation ID middleware for ASGI frameworks :contentReference[oaicite:0]{index=0}
-fastapi==0.115.13                # high-performance web framework :contentReference[oaicite:1]{index=1}
-httpx==0.28.1                    # async HTTP client for Python :contentReference[oaicite:2]{index=2}
-langchain-core==0.3.65           # core components for LangChain :contentReference[oaicite:3]{index=3}
-langsmith==0.4.1                 # LangChain’s tooling & orchestration :contentReference[oaicite:4]{index=4}
-openai==1.88.0                   # OpenAI API client :contentReference[oaicite:5]{index=5}
-pydantic==2.11.7                 # data validation & settings management :contentReference[oaicite:6]{index=6}
-pytest==8.4.1                    # testing framework :contentReference[oaicite:7]{index=7}
-python-dotenv==1.1.0             # load .env files into environment :contentReference[oaicite:8]{index=8}
-python-json-logger==3.3.0        # JSON formatter for Python logging :contentReference[oaicite:9]{index=9}
-starlette==0.47.0                # lightweight ASGI toolkit :contentReference[oaicite:10]{index=10}
-uvicorn==0.34.3                  # lightning-fast ASGI server :contentReference[oaicite:11]{index=11}
-asyncpg==0.30.0                  # async PostgreSQL driver :contentReference[oaicite:12]{index=12}
-pgvector==0.4.1                  # PostgreSQL vector extension support :contentReference[oaicite:13]{index=13}
-slowapi==0.1.9                   # rate-limiting for FastAPI/Starlette :contentReference[oaicite:14]{index=14}
+asgi-correlation-id==4.3.4
+fastapi==0.115.13
+httpx==0.28.1
+langchain-core==0.3.65
+langsmith<0.4
+openai==1.88.0
+pydantic==2.11.7
+pytest==8.4.1
+python-dotenv==1.1.0
+python-json-logger==3.3.0
+uvicorn==0.34.3
+asyncpg==0.30.0
+pgvector==0.4.1
+slowapi==0.1.9
+PyJWT==2.10.1
+pydantic-settings==2.1.0
+prometheus-client==0.20.0
