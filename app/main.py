@@ -22,7 +22,9 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from app.dependencies import get_chat_adapter, get_embedding_adapter
-
+from fastapi import Request
+from fastapi.responses import JSONResponse
+from app.exceptions import AdapterError
 
 # ─── Init ───────────────────────────────────────────────────────────────────────
 configure_logging()
@@ -32,6 +34,18 @@ app = FastAPI(
     version="0.1.0",
     description="Dynamically routes /v1/chat/completions to Ollama, OpenAI, etc.",
 )
+
+# ─── Global Exception Handler ───────────────────────────────────────────────────
+@app.exception_handler(AdapterError)
+async def handle_adapter_error(request: Request, exc: AdapterError):
+    """
+    Catch any AdapterError raised in handlers or adapters
+    and return a clean JSON response.
+    """
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+    )
 
 # ─── Rate Limiting ──────────────────────────────────────────────────────────────
 limiter = Limiter(key_func=get_remote_address)

@@ -1,7 +1,9 @@
 import os, uuid, json, logging
 from typing import List, Dict, Any, AsyncIterator
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, OpenAIError
 from .base import BaseAdapter
+from app.exceptions import AdapterError
+
 
 logger = logging.getLogger("app.adapters.openai_adapter")
 
@@ -14,12 +16,19 @@ class OpenAIAdapter(BaseAdapter):
 
     async def chat(self, messages: List[Dict[str, str]], temperature: float | None = 0.7, max_tokens: int | None = 1024) -> Dict[str, Any]:
         logger.info(f"[OpenAIAdapter] chat payload: model={self.model_name}, temp={temperature}, max_tokens={max_tokens}")
-        response = await client.chat.completions.create(
-            model=self.model_name,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
+        try:
+            response = await client.chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        except OpenAIError as e:
+            logger.error(f"[OpenAIAdapter] chat error: {e}")
+            raise AdapterError(
+                detail="Upstream OpenAI chat failed",
+                status_code=502
+            )
 
         return {
             "id": response.id,
@@ -35,13 +44,20 @@ class OpenAIAdapter(BaseAdapter):
 
     async def chat_stream(self, messages: List[Dict[str, str]], temperature: float | None = 0.7, max_tokens: int | None = 1024) -> AsyncIterator[str]:
         logger.info(f"[OpenAIAdapter] chat_stream payload: model={self.model_name}, temp={temperature}, max_tokens={max_tokens}")
-        stream = await client.chat.completions.create(
-            model=self.model_name,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            stream=True,
-        )
+        try:
+            stream = await client.chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                stream=True,
+            )
+        except OpenAIError as e:
+            logger.error(f"[OpenAIAdapter] chat_stream error: {e}")
+            raise AdapterError(
+                detail="Upstream OpenAI streaming failed",
+                status_code=502
+            )
         async for chunk in stream:
             if chunk.choices:
                 yield json.dumps({
@@ -53,10 +69,17 @@ class OpenAIAdapter(BaseAdapter):
 
     async def embed(self, texts: List[str]) -> Dict[str, Any]:
         logger.info(f"[OpenAIAdapter] embedding payload: model={self.model_name}, input_len={len(texts)}")
-        response = await client.embeddings.create(
-            model=self.model_name,
-            input=texts,
-        )
+        try:
+            response = await client.embeddings.create(
+                model=self.model_name,
+                input=texts,
+            )
+        except OpenAIError as e:
+            logger.error(f"[OpenAIAdapter] embed error: {e}")
+            raise AdapterError(
+                detail="Upstream OpenAI embedding failed",
+                status_code=502
+            )   
         return {
             "object": "list",
             "data": [e.model_dump() for e in response.data],
