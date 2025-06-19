@@ -5,6 +5,8 @@ from app.route_logic import select_adapter_and_model
 
 class Adapter:
     def __init__(self, request_type: str, payload: Dict[str, Any]):
+        self.request_type = request_type
+        self.payload = payload
         provider, model_id = select_adapter_and_model(request_type, payload)
         module = importlib.import_module(f"app.adapters.{provider}_adapter")
         self._inner = module.get_adapter(model_id)

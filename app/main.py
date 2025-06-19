@@ -4,26 +4,24 @@ import datetime
 import jwt
 from fastapi import Body
 
-from typing import Dict, List
-
 from fastapi import FastAPI, HTTPException, Depends
 from starlette.requests import Request
-from pydantic import BaseModel, Field
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from langsmith.middleware import TracingMiddleware
 from asgi_correlation_id import CorrelationIdMiddleware
+from app.adapters.adapter import Adapter
 
 from app.logging_config import configure_logging
 from app.middlewares import LoggingMiddleware
 from app.security import verify_jwt
 from app.middleware_security import SecurityHeadersMiddleware
 from app.middleware_body_limit import BodySizeLimitMiddleware
-from app.adapters.adapter import Adapter
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
+from app.dependencies import get_chat_adapter, get_embedding_adapter
 
 
 # ─── Init ───────────────────────────────────────────────────────────────────────
@@ -63,13 +61,6 @@ try:
 except ImportError:
     pass
 
-# ─── Models ─────────────────────────────────────────────────────────────────────
-class ChatRequest(BaseModel):
-    messages: List[Dict[str, str]]
-    temperature: float | None = 0.7
-    max_tokens: int | None = 1024
-    stream: bool | None = False
-
 
 # ─── API Key Authentication ──────────────────────────────────────────────────────
 @app.post("/v1/token")
@@ -95,32 +86,38 @@ async def get_token(request: Request ,api_key: str = Body(..., embed=True)):
 # ─── Endpoints ──────────────────────────────────────────────────────────────────
 @app.post("/v1/chat/completions")
 @limiter.limit(settings.rate_limit_chat)
-async def chat(request: Request, req: ChatRequest,_: dict = Depends(verify_jwt),):
-    payload = req.dict()
-    adapter = Adapter("stream_chat" if req.stream else "chat", payload)
+async def chat(
+    request: Request,
+    _: dict = Depends(verify_jwt),
+    adapter: Adapter = Depends(get_chat_adapter),
+):
+    # unpack once from adapter.payload
+    payload     = adapter.payload
+    messages    = payload["messages"]
+    temperature = payload.get("temperature", 0.7)
+    max_tokens  = payload.get("max_tokens", 1024)
+    stream      = payload.get("stream", False)
 
-    if req.stream:
+    if stream:
         async def event_gen():
-            async for chunk in adapter.chat_stream(
-                req.messages, req.temperature, req.max_tokens
-            ):
+            async for chunk in adapter.chat_stream(messages, temperature, max_tokens):
                 yield f"data: {chunk}\n\n"
             yield "data: [DONE]\n\n"
         return StreamingResponse(event_gen(), media_type="text/event-stream")
 
-    return await adapter.chat(req.messages, req.temperature, req.max_tokens)
+    return await adapter.chat(messages, temperature, max_tokens)
 
-class EmbeddingRequest(BaseModel):
-    input: List[str] = Field(..., examples=[["What is Simon B. Stirling known for?"]])
 
 @app.post("/v1/embeddings")
 @limiter.limit(settings.rate_limit_embed)
-async def embeddings(request: Request, req: EmbeddingRequest,_: dict = Depends(verify_jwt),):
-    payload = req.dict()
-    adapter = Adapter("embed", payload)
-
+async def embeddings(
+    request: Request,
+    _: dict = Depends(verify_jwt),
+    adapter: Adapter = Depends(get_embedding_adapter),
+):
+    inputs = adapter.payload["input"]
     try:
-        return await adapter.embed(req.input)
+        return await adapter.embed(inputs)
     except Exception:
         logging.getLogger("router").exception("embedding error")
         raise HTTPException(500, detail="Embedding failed")
