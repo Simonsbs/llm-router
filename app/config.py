@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     default_chat_model: str = "openai:gpt-3.5-turbo-0125"
     default_embed_model: str = "openai:text-embedding-3-small"
 
+    # Validation limits
+    max_input_chars: int = 15000    # total characters across all messages
+    max_model_tokens: int = 2048    # maximum tokens allowed by the model
+
     model_config = ConfigDict(
         env_file = ".env",
         env_file_encoding = "utf-8",
