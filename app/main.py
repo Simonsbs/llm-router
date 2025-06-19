@@ -2,6 +2,8 @@ import logging
 from app.config import settings
 import datetime
 import jwt
+import time
+import os
 from fastapi import Body
 
 from fastapi import FastAPI, HTTPException, Depends
@@ -25,6 +27,27 @@ from app.dependencies import get_chat_adapter, get_embedding_adapter
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from app.exceptions import AdapterError
+from prometheus_client import (
+    Counter,
+    Histogram,
+    CollectorRegistry,
+    generate_latest,
+    CONTENT_TYPE_LATEST,
+    multiprocess,
+)
+from fastapi.responses import Response
+
+# ─── Prometheus Metrics ────────────────────────────────────────────────────────
+REQUEST_COUNT = Counter(
+    "http_requests_total",
+    "Total HTTP requests",
+    ["method", "endpoint", "http_status"],
+)
+REQUEST_LATENCY = Histogram(
+    "http_request_duration_seconds",
+    "HTTP request latency",
+    ["method", "endpoint"],
+)
 
 # ─── Init ───────────────────────────────────────────────────────────────────────
 configure_logging()
@@ -74,6 +97,41 @@ try:
     app.add_middleware(TracingMiddleware)
 except ImportError:
     pass
+
+# ─── Metrics Middleware ────────────────────────────────────────────────────────
+@app.middleware("http")
+async def metrics_middleware(request: Request, call_next):
+    start = time.time()
+    response = await call_next(request)
+    elapsed = time.time() - start
+
+    # record histogram and counter
+    REQUEST_LATENCY.labels(method=request.method, endpoint=request.url.path).observe(elapsed)
+    REQUEST_COUNT.labels(
+        method=request.method,
+        endpoint=request.url.path,
+        http_status=str(response.status_code),
+    ).inc()
+
+    return response
+
+# ─── Metrics Endpoint ─────────────────────────────────────────────────────────
+@app.get("/metrics", include_in_schema=False)
+async def metrics():
+    """
+    Expose Prometheus metrics.
+    """
+    mp_dir = os.getenv("PROMETHEUS_MULTIPROC_DIR")
+    if mp_dir and os.path.isdir(mp_dir):
+        # multi-process mode: collect from the shared dir
+        registry = CollectorRegistry()
+        multiprocess.MultiProcessCollector(registry)
+        data = generate_latest(registry)
+    else:
+        # single-process: use the default REGISTRY, which already has our counters
+        data = generate_latest()
+    return Response(content=data, media_type=CONTENT_TYPE_LATEST)
+
 
 # ─── Health Check ───────────────────────────────────────────────────────────────
 @app.get("/healthz", tags=["health"])
