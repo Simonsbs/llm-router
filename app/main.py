@@ -1,5 +1,5 @@
 import logging
-import os
+from app.config import settings
 import datetime
 import jwt
 from fastapi import Body
@@ -47,7 +47,7 @@ app.add_middleware(CorrelationIdMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],                # DEV only: switch to your UI origin when ready
+    allow_origins=settings.cors_origins,
     allow_credentials=False,            # set True once you lock down allow_origins
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-API-Key"],
@@ -72,27 +72,29 @@ class ChatRequest(BaseModel):
 
 
 # ─── API Key Authentication ──────────────────────────────────────────────────────
-API_KEY = os.getenv("LLM_ROUTER_API_KEY")
-SECRET      = os.getenv("JWT_SECRET_KEY")
 @app.post("/v1/token")
-@limiter.limit("10/minute")
+@limiter.limit(settings.rate_limit_token)
 async def get_token(request: Request ,api_key: str = Body(..., embed=True)):
     """
     Exchange a valid API key for a JWT (valid for 60 minutes).
     """
-    if api_key != API_KEY:
+    if api_key != settings.llm_router_api_key:
         raise HTTPException(403, detail="Invalid API key")
 
     now   = datetime.datetime.utcnow()
     exp   = now + datetime.timedelta(minutes=60)
-    token = jwt.encode({"sub": "router-client", "exp": exp}, SECRET, algorithm="HS256")
+    token = jwt.encode(
+        {"sub": "router-client", "exp": exp}, 
+        settings.jwt_secret_key, 
+        algorithm="HS256"
+    )
 
     return {"access_token": token, "token_type": "bearer"}
 
 
 # ─── Endpoints ──────────────────────────────────────────────────────────────────
 @app.post("/v1/chat/completions")
-@limiter.limit("30/minute")
+@limiter.limit(settings.rate_limit_chat)
 async def chat(request: Request, req: ChatRequest,_: dict = Depends(verify_jwt),):
     payload = req.dict()
     adapter = Adapter("stream_chat" if req.stream else "chat", payload)
@@ -112,7 +114,7 @@ class EmbeddingRequest(BaseModel):
     input: List[str] = Field(..., examples=[["What is Simon B. Stirling known for?"]])
 
 @app.post("/v1/embeddings")
-@limiter.limit("60/minute")
+@limiter.limit(settings.rate_limit_embed)
 async def embeddings(request: Request, req: EmbeddingRequest,_: dict = Depends(verify_jwt),):
     payload = req.dict()
     adapter = Adapter("embed", payload)
