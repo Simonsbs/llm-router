@@ -1,3 +1,43 @@
+<#
+.SYNOPSIS
+    Builds, tags, and deploys the SimonGPT LLM Router Docker image locally or remotely.
+
+.DESCRIPTION
+    This PowerShell script reads secrets from a `.env` file or parameters, builds and optionally pushes a Docker image,
+    and runs a container either locally or on a remote host via SSH.
+
+.PARAMETER ImageName
+    Name of the Docker image (without registry prefix).
+
+.PARAMETER ContainerName
+    The name of the container to run or replace.
+
+.PARAMETER ApiKey
+    API key used to authenticate clients (injected into container).
+
+.PARAMETER JwtSecret
+    Secret used to sign JWTs (injected into container).
+
+.PARAMETER OllamaUrl
+    URL for the Ollama server (for in-Docker use).
+
+.PARAMETER Port
+    Container port to expose on host.
+
+.PARAMETER DockerContext
+    Optional Docker buildx context (e.g. for remote builders).
+
+.PARAMETER Target
+    Either 'local' or 'remote' — determines where to deploy.
+
+.EXAMPLE
+    ./start-llm-router.ps1 -Target remote
+
+.NOTES
+    - Assumes SSH access to the remote server.
+    - Designed for use on Windows 10 with Docker Desktop.
+#>
+
 param(
     [string]$ImageName     = "simongpt-llm-router",
     [string]$ContainerName = "llm-router",
@@ -9,7 +49,7 @@ param(
     [ValidateSet("local", "remote")][string]$Target = "local"
 )
 
-# ────── Load .env ──────
+# ────── Read environment variables from .env ──────
 $envVars = @{}
 $envFile = Join-Path $PSScriptRoot ".env"
 if (Test-Path $envFile) {
@@ -29,6 +69,7 @@ if (Test-Path $envFile) {
     }
 }
 
+# ────── Fallback validation ──────
 if (-not $ApiKey)   { Write-Error "LLM_ROUTER_API_KEY not set."; exit 1 }
 if (-not $JwtSecret){ Write-Error "JWT_SECRET_KEY not set."; exit 1 }
 
@@ -39,7 +80,7 @@ $envVars["OLLAMA_URL"]         = $OllamaUrl
 $RegistryHost  = "192.168.1.10:5000"
 $RegistryImage = "$RegistryHost/$ImageName"
 
-# ────── Build and push ──────
+# ────── Docker build & push ──────
 Write-Host "⏳ Building Docker image '$RegistryImage'..."
 
 if ($DockerContext -ne "default") {
@@ -55,9 +96,12 @@ if ($DockerContext -ne "default") {
     docker push $RegistryImage
 }
 
-if ($LASTEXITCODE -ne 0) { Write-Error "Build failed"; exit 1 }
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Build failed"
+    exit 1
+}
 
-# ────── Deploy ──────
+# ────── Deploy locally ──────
 if ($Target -eq "local") {
     Write-Host "🛑 Stopping & removing local '$ContainerName'..."
     $existing = docker ps -a --filter "name=^$ContainerName$" --format "{{.ID}}"
@@ -76,20 +120,21 @@ if ($Target -eq "local") {
     ) + ($envVars.GetEnumerator() | ForEach-Object { "-e", "$($_.Key)=$($_.Value)" }) + @($RegistryImage)
 
     docker @dockerArgs
-    if ($LASTEXITCODE -ne 0) { Write-Error "Failed to start local container"; exit 1 }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Failed to start local container"
+        exit 1
+    }
 
     Write-Host "✅ Local container '$ContainerName' is running on port $Port."
 
+# ────── Deploy remotely ──────
 } else {
     Write-Host "🌐 Deploying to remote server (192.168.1.10)..."
 
-    # Compose env vars string for remote shell
     $envStr = ($envVars.GetEnumerator() | ForEach-Object { "-e $($_.Key)=$($_.Value)" }) -join ' '
 
-    # Remove existing container if exists
     Invoke-Expression "ssh simon@192.168.1.10 docker rm -f $ContainerName 2>`$null"
 
-    # Run the container remotely
     $remoteRun = "docker run -d --name $ContainerName --restart always -p ${Port}:${Port} $envStr $RegistryImage"
     Invoke-Expression "ssh simon@192.168.1.10 $remoteRun"
 
